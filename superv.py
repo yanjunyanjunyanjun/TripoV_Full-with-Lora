@@ -1,8 +1,18 @@
 import torch
 import numpy as np
 import os
-
 import math
+def get_subfolders(path):
+    try:
+        subfolders = [name for name in os.listdir(path) if os.path.isdir(os.path.join(path, name))]
+        print("Subfolders:", subfolders)
+        return subfolders
+    except FileNotFoundError:
+        print(f"Path not found: {path}")
+        return []
+base_path = './data/image/resin/'
+subfolders = get_subfolders(base_path)
+
 class SuperVisionDataset(torch.utils.data.Dataset):
     class Coordinate:
         def view_to_world(distance, azimuth, elevation, is_degree):  #pytorch3d.renderer.look_at_view_transform(dist=distance, elev=elevation, azim=azimuth)  #horizontal plane y=0
@@ -92,17 +102,14 @@ def infer(image_size, image_path, output_file, remove_bg, foreground_ratio, rend
             if image.mode != "RGBA" or image.getextrema()[3][0] == 255:
                 image = rembg.remove(image, session=rembg_session, **rembg_kwargs)
             return image
-
         def resize_foreground(image, ratio):
             alpha = np.where(image[..., 3] > 0)
             y1, y2, x1, x2 = (alpha[0].min(), alpha[0].max(), alpha[1].min(), alpha[1].max())
             fg = image[y1:y2, x1:x2]  #crop the foreground
-            
             size = max(fg.shape[0], fg.shape[1])
             ph0, pw0 = (size - fg.shape[0]) // 2, (size - fg.shape[1]) // 2
             ph1, pw1 = size - fg.shape[0] - ph0, size - fg.shape[1] - pw0
             new_image = np.pad(fg, ((ph0, ph1), (pw0, pw1), (0, 0)), mode="constant", constant_values=((0, 0), (0, 0), (0, 0)))  #pad to square
-            
             new_size = int(new_image.shape[0] / ratio)  #compute padding according to the ratio
             ph0, pw0 = (new_size - size) // 2, (new_size - size) // 2
             ph1, pw1 = new_size - size - ph0, new_size - size - pw0
@@ -155,7 +162,7 @@ def infer(image_size, image_path, output_file, remove_bg, foreground_ratio, rend
             writer.close()
     print('superv !!!')
 
-def train(image_size, batch_size, epochs, checkpoint_path, best_checkpoint_file=None, device=None):    
+def train(image_size ,batch_size, epochs, folder, device=None):    
     def get_ray_bundle(height, width, focal_length, tform_cam2world):
         def meshgrid_xy(tensor1, tensor2):
             ii, jj = torch.meshgrid(tensor1, tensor2, indexing='ij')
@@ -167,8 +174,17 @@ def train(image_size, batch_size, epochs, checkpoint_path, best_checkpoint_file=
         return ray_origins, ray_directions
 
     is_train = 1
-    dataset_train = SuperVisionDataset(is_train=is_train, data_path='./data/image/resin/lion/images_split/train/', image_size=image_size)
-    dataloader_train = torch.utils.data.DataLoader(dataset_train, batch_size=batch_size, shuffle=bool(is_train), num_workers=1, drop_last=bool(is_train), collate_fn=None, pin_memory=False)
+    dataset_train =[]
+    subfolders = folder
+    for item in subfolders:
+        item_train = SuperVisionDataset(is_train=is_train, data_path= f'./data/image/resin/{item}/images_split/train/', image_size=image_size)
+        dataset_train.append(item_train)
+    # dataset_train = SuperVisionDataset(is_train=is_train, data_path='./data/image/resin/lion/images_split/train/', image_size=image_size)
+    dataloader_train = []
+    for item in dataset_train:
+        item_dataloader = torch.utils.data.DataLoader(item, batch_size=batch_size, shuffle=bool(is_train), num_workers=1, drop_last=bool(is_train), collate_fn=None, pin_memory=False)
+        dataloader_train.append(item_dataloader)
+    # dataloader_train = torch.utils.data.DataLoader(dataset_train, batch_size=batch_size, shuffle=bool(is_train), num_workers=1, drop_last=bool(is_train), collate_fn=None, pin_memory=False)
 
     #images,masks,poses = next(iter(dataloader_train))
     #print('images', images.shape)    #[-1, 32, 32, 3]
@@ -196,6 +212,7 @@ def train(image_size, batch_size, epochs, checkpoint_path, best_checkpoint_file=
     #model = TSR(img_size=image_size, depth=16, embed_dim=768, num_channels=1024, num_layers=16, cross_attention_dim=768, radius=3, valid_thresh=0.001, num_samples_per_ray=128, n_hidden_layers=9, official=True)
     model = TSR(img_size=image_size, depth=16, embed_dim=768, num_channels=1024, num_layers=16, cross_attention_dim=768, radius=99, valid_thresh=0.00001, num_samples_per_ray=128, n_hidden_layers=9, official=True)
     model.load_state_dict(torch.load('./ckpt/TripoSR/model.ckpt', map_location='cpu'),strict= False)
+    
     #==============================================================================================
     # frozen the grad
     for param in model.parameters():
@@ -206,15 +223,14 @@ def train(image_size, batch_size, epochs, checkpoint_path, best_checkpoint_file=
         if "B" in name:
             param.requires_grad = True
     #check the result
-    for name, param in model.named_parameters():
-        print(f"{name}: requires_grad = {param.requires_grad}")
+    # for name, param in model.named_parameters():
+    #     print(f"{name}: requires_grad = {param.requires_grad}")
 
     #==============================================================================================
     model.to(device)
     model.train()
     
     print("parameters: %d M"%(sum(p.numel() for p in model.parameters())/1024/1024))
-
     #import torchsummary  #pip install torchsummary
     #torchsummary.summary(model, input_size=(1, image_size, image_size, 3), batch_size=batch_size)
 
@@ -236,67 +252,66 @@ def train(image_size, batch_size, epochs, checkpoint_path, best_checkpoint_file=
 
     for epoch in range(0, epochs):
         losses = []
-        for index, (images,masks,poses) in enumerate(dataloader_train):
-            target_img = images.to(device)
-            target_msk = masks.to(device)
-            target_pos = poses.to(device)
+        for train_unit in dataloader_train:
+            for index, (images,masks,poses) in enumerate(train_unit):
+                target_img = images.to(device)
+                target_msk = masks.to(device)
+                target_pos = poses.to(device)
+                target_img = target_img[:, None]  #[-1, 32, 32, 3]  ->  [-1, 1, 32, 32, 3]
+                target_msk = target_msk[:, None]  #[-1, 32, 32, 1]  ->  [-1, 1, 32, 32, 1]
+                print('target_img', target_img.shape)
+                print('target_msk', target_msk.shape)
+                scene_codes = model(target_img)
+                #print('scene_codes', scene_codes.shape)  #[-1, 3, 40, 64, 64]
+                images_all = []
+                masks_all = []
+                for idx, scene_code in enumerate(scene_codes):
+                    images_one = []
+                    masks_one = []
+                    for i in range(1):
+                        rays_o, rays_d = get_ray_bundle(height=image_size, width=image_size, focal_length=focal_length, tform_cam2world=target_pos[idx])  #[32, 32, 3]  [32, 32, 3]
+                        image, alpha = model.renderer(model.decoder, scene_code, rays_o, rays_d)
+                        images_one.append(image)
+                        masks_one.append(alpha)
+                    images_all.append(torch.stack(images_one, dim=0))
+                    masks_all.append(torch.stack(masks_one, dim=0))
+                image_pred = torch.stack(images_all, dim=0)
+                mask_pred = torch.stack(masks_all, dim=0)
+                print('image_pred', image_pred.shape)  #[-1, 1, 32, 32, 3]
+                print('mask_pred', mask_pred.shape)  #[-1, 1, 32, 32, 1]
+                loss_img = torch.nn.functional.mse_loss(target_img, image_pred)
+                loss_msk = torch.nn.functional.mse_loss(target_msk, mask_pred)
+                loss = loss_img + loss_msk
+                print('loss', loss.item(), '', loss_img.item(), loss_msk.item())
+                #TODO loesses in TripoSR's:  #Loss = (1/n other views mse + current view lpisp + current view mask bce)      #Local Rendering Supervision(patchs)   
+                losses.append(loss.item())
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()   
+                if index%1==0:
+                    save_image(target_img[0][0], image_pred[0][0], target_msk[0][0], mask_pred[0][0], flag='train', epoch=epoch, index=index)
+                    save_dir = "outs/ckpt"
+                    os.makedirs(save_dir, exist_ok=True)
+                    model_save_path = os.path.join(save_dir, "model_checkpoint.pth")
+                    torch.save({
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                    }, model_save_path)
 
-            target_img = target_img[:, None]  #[-1, 32, 32, 3]  ->  [-1, 1, 32, 32, 3]
-            target_msk = target_msk[:, None]  #[-1, 32, 32, 1]  ->  [-1, 1, 32, 32, 1]
-            print('target_img', target_img.shape)
-            print('target_msk', target_msk.shape)
-
-            scene_codes = model(target_img)
-            #print('scene_codes', scene_codes.shape)  #[-1, 3, 40, 64, 64]
-
-            images_all = []
-            masks_all = []
-            for idx, scene_code in enumerate(scene_codes):
-                images_one = []
-                masks_one = []
-                for i in range(1):
-                    rays_o, rays_d = get_ray_bundle(height=image_size, width=image_size, focal_length=focal_length, tform_cam2world=target_pos[idx])  #[32, 32, 3]  [32, 32, 3]
-                    image, alpha = model.renderer(model.decoder, scene_code, rays_o, rays_d)
-                    images_one.append(image)
-                    masks_one.append(alpha)
-                images_all.append(torch.stack(images_one, dim=0))
-                masks_all.append(torch.stack(masks_one, dim=0))
-            image_pred = torch.stack(images_all, dim=0)
-            mask_pred = torch.stack(masks_all, dim=0)
-            print('image_pred', image_pred.shape)  #[-1, 1, 32, 32, 3]
-            print('mask_pred', mask_pred.shape)  #[-1, 1, 32, 32, 1]
-
-            loss_img = torch.nn.functional.mse_loss(target_img, image_pred)
-            loss_msk = torch.nn.functional.mse_loss(target_msk, mask_pred)
-            loss = loss_img + loss_msk
-            print('loss', loss.item(), '', loss_img.item(), loss_msk.item())
-
-            #TODO loesses in TripoSR's:  #Loss = (1/n other views mse + current view lpisp + current view mask bce)      #Local Rendering Supervision(patchs)   
-
-            losses.append(loss.item())
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()   
-
-            if index%1==0:
-                save_image(target_img[0][0], image_pred[0][0], target_msk[0][0], mask_pred[0][0], flag='train', epoch=epoch, index=index)  
-
-            #     mesh_path = './outs/image/'+'train'+'/'
-            #     os.makedirs(mesh_path, exist_ok=True)
-            #     mesh = model.extract_mesh(scene_codes)[0]
-            #     mesh.export(os.path.join(mesh_path, "mesh__epoch_{:04d}.obj".format(epoch)))  #.ply          
-
-        LOSS_train = sum(losses)/len(losses)
-        print('epoch=%06d  loss=%.6f'%(epoch, LOSS_train))
-        
-        scheduler.step()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
-
+                    print(f"Model saved to {model_save_path}") 
+                #     mesh_path = './outs/image/'+'train'+'/'
+                #     os.makedirs(mesh_path, exist_ok=True)
+                #     mesh = model.extract_mesh(scene_codes)[0]
+                #     mesh.export(os.path.join(mesh_path, "mesh__epoch_{:04d}.obj".format(epoch)))  #.ply          
+            LOSS_train = sum(losses)/len(losses)
+            print('epoch=%06d  loss=%.6f'%(epoch, LOSS_train))   
+            scheduler.step()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
         #torch.cuda.empty_cache()
 
 def main(device=['cpu','cuda'][torch.cuda.is_available()]):
     #infer(image_size=512, image_path=['./data/image/test/images/Lion.png'][0], output_file='./outs/stereo/test/Lion.obj', remove_bg=True, foreground_ratio=0.85, render_video=True, device=device)
-    train(image_size=[512,64][1], batch_size=1, epochs=1, checkpoint_path='./outs/ckpt/', best_checkpoint_file='./outs/ckpt/checkpoint.pth', device=device)
+    train(image_size=[512,64][1], batch_size=1, epochs=1, folder= subfolders ,device=device)
 
 if __name__ == '__main__':  #cls; python -Bu superv.py
     main()

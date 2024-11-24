@@ -98,7 +98,7 @@ class View:
         #rendered_rgba = torch.cat((rendered_rgb, alpha_mask.unsqueeze(-1)), dim=-1)
         return rendered_rgba
 
-def mesh(obj_file, is_vertex_color, image_path, elevation_number=2, azimuth_number=1, distance=2.0, image_size=512, step=4, device=['cpu','cuda'][torch.cuda.is_available()]):
+def mesh(obj_file, is_vertex_color, image_path, elevation_number=24, azimuth_number=12, distance=2.0, image_size=512, step=4, device=['cpu','cuda'][torch.cuda.is_available()]):
     def save(rendered_rgba_all, elevation, azimuth_all, image_path):
         for rendered_rgba,azimuth in zip(rendered_rgba_all, azimuth_all):
             save_file=image_path+'/image__distance_%s__elevation_%03d__azimuth_%03d.png'%(str(distance).replace('.','_'),elevation,azimuth)

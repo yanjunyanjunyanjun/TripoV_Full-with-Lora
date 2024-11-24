@@ -1,15 +1,13 @@
 import torch
-
+import os
 class SuperFocus:
     def __init__(self, device):
         from carvekit.api.high import HiInterface  #pip install carvekit --extra-index-url https://download.pytorch.org/whl/cpu  #cu117
         self.hiInterface = HiInterface(object_type=['object','hairs-like'][0],  batch_size_seg=1, batch_size_matting=1, seg_mask_size=640, matting_mask_size=2048, trimap_prob_threshold=231, trimap_dilation=30, trimap_erosion_iters=5, fp16=False, device=device)
-
     @torch.no_grad()
     def __call__(self, image):
         image = self.hiInterface([image])[0]
         return image
-
 def focus(image_source_path, image_target_path):
     import os
     #if os.path.exists(image_target_path): return False
@@ -25,10 +23,20 @@ def focus(image_source_path, image_target_path):
         print('focus:', '%08d/%08d'%(index, len(image_todo)), image_save)
     return True
 
-def main():
-    for obj in ['lion']:
+def get_subfolders(path):
+    try:
+        subfolders = [name for name in os.listdir(path) if os.path.isdir(os.path.join(path, name))]
+        print("Subfolders:", subfolders)
+        return subfolders
+    except FileNotFoundError:
+        print(f"Path not found: {path}")
+        return []
+def main(folders:list):
+    for obj in folders:
         focus(image_source_path='./data/image/resin/'+obj+'/images_mesh/', image_target_path='./data/image/resin/'+obj+'/images_focus/')
 
 if __name__ == '__main__':
-    main()
+    base_path = './data/image/resin/'
+    subfolders = get_subfolders(base_path)
+    main(subfolders)
 

@@ -557,7 +557,7 @@ class FeedForward(torch.nn.Module):
         self.net.append(torch.nn.Dropout(dropout))
         # project out
         self.net.append(torch.nn.Linear(inner_dim, dim_out)) 
-        self.net.append(Lora_layer(self.inner_dim, self.dim_out, 8 , 0.9))
+        self.net.append(Lora_layer(self.inner_dim, self.dim_out, 8 , 0.7))
         # FF as used in Vision Transformer, MLP-Mixer, etc. have a final dropout
         if final_dropout:
             self.net.append(torch.nn.Dropout(dropout))

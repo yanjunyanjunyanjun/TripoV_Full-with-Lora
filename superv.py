@@ -2,6 +2,8 @@ import torch
 import numpy as np
 import os
 import math
+from matplotlib import pyplot as plt
+
 def get_subfolders(path):
     try:
         subfolders = [name for name in os.listdir(path) if os.path.isdir(os.path.join(path, name))]
@@ -12,6 +14,47 @@ def get_subfolders(path):
         return []
 base_path = './data/image/resin/'
 subfolders = get_subfolders(base_path)
+
+#----------------------------------------------------------------------
+#chamfer_evaluation
+from pytorch3d.ops import sample_points_from_meshes, knn_points
+from pytorch3d.io import load_objs_as_meshes
+def chamfer_distance_from_meshes(mesh1, mesh2, num_samples=10000):
+    def normalize_point_cloud(points):
+        # points: (B, P, D)
+        center = points.mean(dim=1, keepdim=True)  
+        points_centered = points - center          
+        scale = points_centered.norm(dim=2, p=2).max(dim=1, keepdim=True)[0]  
+        points_normalized = points_centered / scale
+        return points_normalized
+    points1 = sample_points_from_meshes(mesh1, num_samples)
+    normalized_p1 = normalize_point_cloud(points1)
+    points2 = sample_points_from_meshes(mesh2, num_samples)
+    normalized_p2 = normalize_point_cloud(points2)
+    dists_p1_p2, idx, _= knn_points(normalized_p1, normalized_p2, K=1)
+    dists_p2_p1, idx, _ = knn_points(normalized_p2, normalized_p1, K=1)
+    cd_p1_p2 = dists_p1_p2.mean(dim=1).squeeze()
+    cd_p2_p1 = dists_p2_p1.mean(dim=1).squeeze()
+    chamfer_dist = cd_p1_p2 + cd_p2_p1
+    return chamfer_dist
+
+#---------------------------------------------------------------------------
+def Diagramm(loss:list, chamfer:list):
+    loss_values = loss
+    chamfer_values = chamfer
+    epochs = list(range(1, len(loss_values) + 1)) 
+    plt.figure(figsize=(8, 6))
+    plt.plot(epochs, loss_values, label='Loss', marker='o', color='blue', linewidth=2)
+    plt.plot(epochs, chamfer_values, label='Chamfer Distance', marker='s', color='orange', linewidth=2)
+    plt.title('Loss and Chamfer Distance over Epochs', fontsize=16)
+    plt.xlabel('Epochs', fontsize=14)
+    plt.ylabel('Value', fontsize=14)
+    plt.legend(fontsize=12)
+    plt.grid(True, linestyle='--', alpha=1)
+    output_path = './outs/result/result.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.show()
+    print(f"Result saved {output_path}")
 
 class SuperVisionDataset(torch.utils.data.Dataset):
     class Coordinate:
@@ -178,35 +221,30 @@ def train(image_size ,batch_size, epochs, folder, device=None):
     subfolders = folder
     for item in subfolders:
         item_train = SuperVisionDataset(is_train=is_train, data_path= f'./data/image/resin/{item}/images_split/train/', image_size=image_size)
-        dataset_train.append(item_train)
+        #######################加个tupo
+        dataset_train.append((item_train,item))
     # dataset_train = SuperVisionDataset(is_train=is_train, data_path='./data/image/resin/lion/images_split/train/', image_size=image_size)
     dataloader_train = []
     for item in dataset_train:
-        item_dataloader = torch.utils.data.DataLoader(item, batch_size=batch_size, shuffle=bool(is_train), num_workers=1, drop_last=bool(is_train), collate_fn=None, pin_memory=False)
-        dataloader_train.append(item_dataloader)
+        item_dataloader = torch.utils.data.DataLoader(item[0], batch_size=batch_size, shuffle=bool(is_train), num_workers=1, drop_last=bool(is_train), collate_fn=None, pin_memory=False)
+        dataloader_train.append((item_dataloader,item[1]))
     # dataloader_train = torch.utils.data.DataLoader(dataset_train, batch_size=batch_size, shuffle=bool(is_train), num_workers=1, drop_last=bool(is_train), collate_fn=None, pin_memory=False)
-
     #images,masks,poses = next(iter(dataloader_train))
     #print('images', images.shape)    #[-1, 32, 32, 3]
     #print('masks',  masks.shape)     #[-1, 32, 32, 1]
     #print('poses',  poses)           #[4, 4]
- 
     #data = np.load('./data/nerf/tiny_nerf_data.npz')  #TODO  render and load objavase for training
     #images, poses, focal = data["images"],data["poses"], data["focal"]
     #print('images', images.shape)  #(106, 100, 100, 3)
     #print('poses', poses.shape)    #(106, 4, 4)
     #print('focal', focal)          #138.88887889922103
-
     #height, width = images.shape[1:3]   #(-1, 224, 224, 3)
     #near_thresh, far_thresh = 1, 1000   #2.0, 6.0
-
     #images = torch.from_numpy(images[..., :3]).to(device)
     #poses = torch.from_numpy(poses).to(device)
     #focal = torch.from_numpy(focal).to(device)  #138.88887889922103
     focal_length = 351.6771/4
-
     #image_processor = ImagePreprocessor(image_size)
-
     from network import TSR
     from network_backbone import Lora_layer
     #model = TSR(img_size=image_size, depth=16, embed_dim=768, num_channels=1024, num_layers=16, cross_attention_dim=768, radius=3, valid_thresh=0.001, num_samples_per_ray=128, n_hidden_layers=9, official=True)
@@ -225,18 +263,14 @@ def train(image_size ,batch_size, epochs, folder, device=None):
     #check the result
     # for name, param in model.named_parameters():
     #     print(f"{name}: requires_grad = {param.requires_grad}")
-
     #==============================================================================================
     model.to(device)
     model.train()
-    
     print("parameters: %d M"%(sum(p.numel() for p in model.parameters())/1024/1024))
     #import torchsummary  #pip install torchsummary
     #torchsummary.summary(model, input_size=(1, image_size, image_size, 3), batch_size=batch_size)
-
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=list(range(0, epochs, epochs//10 if epochs>10 else 1)), gamma=0.95)
-
     def save_image(image_I, image_O, alpha_I, alpha_O, flag, epoch, index):
         temp_path = './outs/image/'+flag+'/'
         os.makedirs(temp_path, exist_ok=True)
@@ -249,11 +283,16 @@ def train(image_size ,batch_size, epochs, folder, device=None):
         PIL.Image.fromarray((image_o*255).astype('uint8')).save(temp_path+'/image__epoch_{:04d}__index_{:04d}__{:s}__image_2o.png'.format(epoch,index,flag))
         PIL.Image.fromarray((alpha_i*255).astype('uint8')).save(temp_path+'/image__epoch_{:04d}__index_{:04d}__{:s}__alpha_1i.png'.format(epoch,index,flag))
         PIL.Image.fromarray((alpha_o*255).astype('uint8')).save(temp_path+'/image__epoch_{:04d}__index_{:04d}__{:s}__alpha_2o.png'.format(epoch,index,flag))
-
+    
+    epoch_loss =[]
+    epoch_chamfer=[]
     for epoch in range(0, epochs):
-        losses = []
         for train_unit in dataloader_train:
-            for index, (images,masks,poses) in enumerate(train_unit):
+            losses = []
+            chamfer_evaluation = []
+            file_name = train_unit[1]
+            train_unit_data = train_unit[0]
+            for index, (images,masks,poses) in enumerate(train_unit_data):
                 target_img = images.to(device)
                 target_msk = masks.to(device)
                 target_pos = poses.to(device)
@@ -287,8 +326,19 @@ def train(image_size ,batch_size, epochs, folder, device=None):
                 losses.append(loss.item())
                 optimizer.zero_grad()
                 loss.backward()
-                optimizer.step()   
-                if index%1==0:
+                optimizer.step()
+                mesh_path = './outs/mesh/'+'train'+'/'+ file_name
+                os.makedirs(mesh_path, exist_ok=True)
+                mesh = model.extract_mesh(scene_codes)[0]
+                mesh.export(os.path.join(mesh_path, "mesh__epoch_{:04d}.obj".format(epoch)))  
+                print('Mesh saved')
+                generate_path = './outs/mesh/train/' + file_name +"/mesh__epoch_{:04d}.obj".format(epoch)
+                m_generate = load_objs_as_meshes([generate_path], load_textures=False)
+                train_path = './data/mesh/resin/' + file_name +'/'+file_name+'.obj'
+                m_train = load_objs_as_meshes([train_path], load_textures=False)
+                result = chamfer_distance_from_meshes(m_generate,m_train,100)
+                chamfer_evaluation.append(result)   
+                if index%10==0:
                     save_image(target_img[0][0], image_pred[0][0], target_msk[0][0], mask_pred[0][0], flag='train', epoch=epoch, index=index)
                     save_dir = "outs/ckpt"
                     os.makedirs(save_dir, exist_ok=True)
@@ -297,22 +347,24 @@ def train(image_size ,batch_size, epochs, folder, device=None):
                         "model_state_dict": model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
                     }, model_save_path)
-
                     print(f"Model saved to {model_save_path}") 
-                #     mesh_path = './outs/image/'+'train'+'/'
-                #     os.makedirs(mesh_path, exist_ok=True)
-                #     mesh = model.extract_mesh(scene_codes)[0]
-                #     mesh.export(os.path.join(mesh_path, "mesh__epoch_{:04d}.obj".format(epoch)))  #.ply          
-            LOSS_train = sum(losses)/len(losses)
-            print('epoch=%06d  loss=%.6f'%(epoch, LOSS_train))   
-            scheduler.step()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
-        #torch.cuda.empty_cache()
+
+        LOSS_train = sum(losses)/len(losses)
+        Chamfer_train = sum(chamfer_evaluation)/len(chamfer_evaluation)
+        print('now the model is',file_name, 'Loss is',LOSS_train)   
+        print('now the model is',file_name, 'Chamfer_train',Chamfer_train)
+        epoch_loss.append(LOSS_train)
+        epoch_chamfer.append(Chamfer_train)
+        scheduler.step()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
+    return epoch_loss, epoch_chamfer
+    #torch.cuda.empty_cache()
 
 def main(device=['cpu','cuda'][torch.cuda.is_available()]):
     #infer(image_size=512, image_path=['./data/image/test/images/Lion.png'][0], output_file='./outs/stereo/test/Lion.obj', remove_bg=True, foreground_ratio=0.85, render_video=True, device=device)
-    train(image_size=[512,64][1], batch_size=1, epochs=1, folder= subfolders ,device=device)
-
+    loss, chamfer = train(image_size=[512,64][1], batch_size=2, epochs=10, folder= subfolders ,device=device)
+    Diagramm(loss,chamfer)
+    print('done')
 if __name__ == '__main__':  #cls; python -Bu superv.py
     main()
 

@@ -13,7 +13,7 @@ def split(image_path_source, image_path_target, train_percent):
     unit = 10000
     for one_file in os.listdir(image_path_source):
         if os.path.isfile(os.path.join(image_path_source, one_file)): 
-            sub_path = sub_sets[0] if random.randrange(0,unit)<0.8*unit else sub_sets[1]      
+            sub_path = sub_sets[0] if random.randrange(0,unit)< train_percent*unit else sub_sets[1]      
             shutil.copy(os.path.join(image_path_source, one_file), os.path.join(image_path_target, sub_path, one_file))
 
 import os
@@ -28,7 +28,7 @@ def get_subfolders(path):
     
 def main(folders:list):
     for obj in folders:
-        split(image_path_source='./data/image/resin/'+obj+'/images_focus/', image_path_target='./data/image/resin/'+obj+'/images_split/', train_percent=0.8)
+        split(image_path_source='./data/image/resin/'+obj+'/images_focus/', image_path_target='./data/image/resin/'+obj+'/images_split/', train_percent=1)
     print('splitting is done')
 
 if __name__ == '__main__':    #python -Bu superv_01_data_03_split.py
